@@ -11,6 +11,7 @@ import {
 	__physicalTargetSegmentsForTesting,
 	onAppendOnlyModeChanged,
 	onCodeModeChanged,
+	onHistoryScopeChanged,
 	onModelRolesChanged,
 	onStatusLineSessionAccentChanged,
 	resetSettingsForTest,
@@ -1345,6 +1346,36 @@ describe("Settings", () => {
 
 			isolated.set("statusLine.sessionAccent", true);
 			expect(values).toEqual([false, true, false]);
+		});
+	});
+
+	describe("historyScope hooks", () => {
+		it("notifies subscribers on every write that can change the effective value", () => {
+			const isolated = Settings.isolated();
+			const values: string[] = [];
+			const unsubscribe = onHistoryScopeChanged(() => {
+				values.push(isolated.get("historyScope"));
+			});
+
+			try {
+				isolated.set("historyScope", "project");
+				expect(values.at(-1)).toBe("project");
+
+				isolated.override("historyScope", "session");
+				expect(values.at(-1)).toBe("session");
+
+				isolated.clearOverride("historyScope");
+				expect(values.at(-1)).toBe("project");
+			} finally {
+				unsubscribe();
+			}
+
+			// The hook leg fires on every write, so listeners are idempotent by
+			// contract; what must hold is that no write is missed, and that an
+			// unsubscribed listener stops hearing them.
+			const delivered = values.length;
+			isolated.set("historyScope", "global");
+			expect(values).toHaveLength(delivered);
 		});
 	});
 

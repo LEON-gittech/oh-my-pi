@@ -65,6 +65,7 @@ import { formatModelString, type ResolvedModelRoleValue } from "../config/model-
 import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
 import {
 	isSettingsInitialized,
+	onHistoryScopeChanged,
 	onModelRolesChanged,
 	onStatusLineSessionAccentChanged,
 	Settings,
@@ -1022,7 +1023,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.lastAssistantUsage = undefined;
 		this.servedModelTracker = new ServedModelTracker();
 		this.pendingTools.clear();
-		this.#reloadScopedEditorHistory();
+		this.#refreshHistoryScope();
 	}
 
 	/** Prompt-recall filter from the `historyScope` setting; `undefined` is global recall. */
@@ -1031,27 +1032,36 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/**
-	 * Editor-facing view of prompt history under the active recall scope. The
-	 * editor snapshots recall when the view is installed, so the scope is
-	 * resolved per call rather than captured here.
+	 * Installs the scope-aware recall view into `editor` and records the scope
+	 * the snapshot was taken under. The view resolves the scope per call, so the
+	 * `Ctrl+R` overlay and future `getRecent` reads always see the live setting;
+	 * only the editor's Up/Down snapshot needs reinstalling.
 	 */
-	#scopedHistory(storage: HistoryStorage) {
-		return {
+	#installScopedHistory(editor: CustomEditor, storage: HistoryStorage): void {
+		const scope = this.historyScope();
+		this.#installedHistoryScopeKey = `${scope?.cwd ?? ""}\u0000${scope?.sessionId ?? ""}`;
+		editor.setHistoryStorage({
 			add: storage.add.bind(storage),
 			getRecent: (limit: number) => storage.getRecent(limit, this.historyScope()),
-		};
+		});
 	}
 
 	/**
-	 * Re-snapshots the editor's recall list when the scope's identity may have
-	 * moved. Session scope follows the live session id, so a new, resumed, or
-	 * branched session has to stop offering the previous session's prompts.
+	 * Re-snapshots the editor's recall list when the active scope's identity
+	 * changed: a new/resumed/branched session, a `/move` or cross-project resume,
+	 * or a `historyScope` edit (including one a project-settings reload brings
+	 * in). An unchanged scope keeps the current list and its pending drafts.
 	 */
-	#reloadScopedEditorHistory(): void {
+	#refreshHistoryScope(): void {
 		const storage = this.historyStorage;
-		if (!storage || this.historyScope()?.sessionId === undefined) return;
-		this.editor.setHistoryStorage(this.#scopedHistory(storage));
+		if (!storage) return;
+		const scope = this.historyScope();
+		if (`${scope?.cwd ?? ""}\u0000${scope?.sessionId ?? ""}` === this.#installedHistoryScopeKey) return;
+		this.#installScopedHistory(this.editor, storage);
 	}
+
+	/** Scope identity (`cwd\0sessionId`) the editor's current recall snapshot was taken under. */
+	#installedHistoryScopeKey: string | undefined;
 	readonly #uiHelpers: UiHelpers;
 	#sttController: STTController | undefined;
 	#voiceAnimationInterval: NodeJS.Timeout | undefined;
@@ -1220,7 +1230,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		try {
 			this.historyStorage = HistoryStorage.open();
 			this.historyStorage.setSessionResolver(() => this.sessionManager.getSessionId());
-			this.editor.setHistoryStorage(this.#scopedHistory(this.historyStorage));
+			this.#installScopedHistory(this.editor, this.historyStorage);
 		} catch (error) {
 			logger.warn("History storage unavailable", { error: String(error) });
 		}
@@ -1624,6 +1634,11 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.#syncStatusLineSettings();
 				this.#handleSessionAccentInputsChanged();
 			}),
+			// The editor snapshots recall once per install, so a scope edit — including
+			// one a project rescope brings in — has to reinstall the scoped view.
+			onHistoryScopeChanged(() => {
+				this.#refreshHistoryScope();
+			}),
 		);
 		// Resync the welcome banner to the live model: init-time reconciliations
 		// (#reconcileModeFromSession, #enterPlanMode for plan.defaultOnStartup)
@@ -1915,6 +1930,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.statusLine.applyCwdChange();
+		this.#refreshHistoryScope();
 		return true;
 	}
 
@@ -5528,7 +5544,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.syncComposerShape();
 		nextEditor.setMaxHeight(this.#computeEditorMaxHeight());
 		if (this.historyStorage) {
-			nextEditor.setHistoryStorage(this.#scopedHistory(this.historyStorage));
+			this.#installScopedHistory(nextEditor, this.historyStorage);
 		}
 		nextEditor.setText(previousText);
 

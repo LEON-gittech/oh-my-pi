@@ -761,6 +761,9 @@ export class Settings {
 		if (path === "statusLine.sessionAccent") {
 			statusLineSessionAccentSignal.fire();
 		}
+		if (path === "historyScope") {
+			historyScopeSignal.fire();
+		}
 		if (path === "modelRoles") {
 			modelRolesSignal.fire();
 		}
@@ -3151,6 +3154,9 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 	"hindsight.bankIdPrefix": () => hindsightScopeSignal.fire(),
 	"hindsight.scoping": () => hindsightScopeSignal.fire(),
 	extendedContext: () => extendedContextSignal.fire(),
+	// Also fired from #fireEffectiveSettingChanged; this entry is what a
+	// reloadForCwd rescope (which replays hooks, not effective changes) hits.
+	historyScope: () => historyScopeSignal.fire(),
 	"worktree.base": value => {
 		const dir = typeof value === "string" && value.trim() ? value : undefined;
 		// Always call so an unset/empty value clears a previously-applied override.
@@ -3217,6 +3223,20 @@ const statusLineSessionAccentSignal = new SettingSignal("statusLine.sessionAccen
  * Returns an unsubscribe function. Callers should re-read settings in the callback.
  */
 export const onStatusLineSessionAccentChanged = (cb: () => void) => statusLineSessionAccentSignal.on(cb);
+
+/** Fires when a write or project rescope can have changed `historyScope`. */
+const historyScopeSignal = new SettingSignal("historyScope");
+
+/**
+ * Subscribe to prompt-recall scope changes. Interactive mode re-snapshots the
+ * editor's Up/Down recall list, which is otherwise captured once per install.
+ * Fires from the effective-change path (`set`/`override`/`clearOverride`) and
+ * from the hook table, so a `reloadForCwd` rescope — which replays hooks rather
+ * than effective changes — is observed too. The hook leg is not change-gated,
+ * so listeners MUST be idempotent; the interactive listener compares the scope
+ * identity it last installed. Returns an unsubscribe function.
+ */
+export const onHistoryScopeChanged = (cb: () => void) => historyScopeSignal.on(cb);
 
 /** Fires when any `hindsight.bankId` / `bankIdPrefix` / `scoping` value changes. */
 const hindsightScopeSignal = new SettingSignal("hindsight scope");
