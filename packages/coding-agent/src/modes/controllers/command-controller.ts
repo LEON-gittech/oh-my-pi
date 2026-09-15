@@ -1128,6 +1128,8 @@ export class CommandController {
 		}
 
 		this.ctx.statusLine.invalidate();
+		// fork() mints a new session id, so session-scoped recall has to re-snapshot.
+		this.ctx.refreshHistoryScope();
 		this.ctx.ui.requestRender();
 
 		const sessionFile = this.ctx.session.sessionFile;

@@ -1023,10 +1023,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.lastAssistantUsage = undefined;
 		this.servedModelTracker = new ServedModelTracker();
 		this.pendingTools.clear();
-		this.#refreshHistoryScope();
+		this.refreshHistoryScope();
 	}
 
-	/** Prompt-recall filter from the `historyScope` setting; `undefined` is global recall. */
+	/**
+	 * Prompt-recall filter from the `historyScope` setting; `undefined` is global
+	 * recall. Reads `sessionManager`, not `viewSession`: the editor belongs to the
+	 * main session even while the transcript is focused on a subagent, and its
+	 * submissions are stamped with the same id (see the `setSessionResolver` call
+	 * in `init`). Both sides MUST resolve from the same session — scoping recall
+	 * to the focused agent while writes stay on the main session would hide the
+	 * prompts the user just typed.
+	 */
 	historyScope(): HistoryScope | undefined {
 		return resolveHistoryScope(settings.get("historyScope"), this.sessionManager.getSessionId());
 	}
@@ -1048,11 +1056,12 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/**
 	 * Re-snapshots the editor's recall list when the active scope's identity
-	 * changed: a new/resumed/branched session, a `/move` or cross-project resume,
-	 * or a `historyScope` edit (including one a project-settings reload brings
-	 * in). An unchanged scope keeps the current list and its pending drafts.
+	 * changed: a new/forked/resumed/branched session, a `/move` or cross-project
+	 * resume, or a `historyScope` edit (including one a project-settings reload
+	 * brings in). An unchanged scope keeps the current list and its pending
+	 * drafts, so callers may fire this on any transition that might move it.
 	 */
-	#refreshHistoryScope(): void {
+	refreshHistoryScope(): void {
 		const storage = this.historyStorage;
 		if (!storage) return;
 		const scope = this.historyScope();
@@ -1229,6 +1238,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		process.stdout.on("resize", this.#resizeHandler);
 		try {
 			this.historyStorage = HistoryStorage.open();
+			// Same session as `historyScope()` reads, by contract: submissions from
+			// this editor are the main session's prompts even under subagent focus.
 			this.historyStorage.setSessionResolver(() => this.sessionManager.getSessionId());
 			this.#installScopedHistory(this.editor, this.historyStorage);
 		} catch (error) {
@@ -1583,7 +1594,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#liveCommandController.stop();
 			await this.#quiesceVibeForSessionSwitch();
 		});
-		this.session.setSessionSwitchReconciler?.(() => this.#reconcileModeFromSession({ preserveActiveGoal: true }));
+		this.session.setSessionSwitchReconciler?.(() => {
+			// Every switch/branch re-anchors the session id the recall scope reads.
+			this.refreshHistoryScope();
+			return this.#reconcileModeFromSession({ preserveActiveGoal: true });
+		});
 		await logger.time("InteractiveMode.init:reconcileMode", () => this.#reconcileModeFromSession());
 
 		// Brand-new sessions optionally start in plan mode when the user has made it
@@ -1637,7 +1652,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			// The editor snapshots recall once per install, so a scope edit — including
 			// one a project rescope brings in — has to reinstall the scoped view.
 			onHistoryScopeChanged(() => {
-				this.#refreshHistoryScope();
+				this.refreshHistoryScope();
 			}),
 		);
 		// Resync the welcome banner to the live model: init-time reconciliations
@@ -1930,7 +1945,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.statusLine.applyCwdChange();
-		this.#refreshHistoryScope();
+		this.refreshHistoryScope();
 		return true;
 	}
 

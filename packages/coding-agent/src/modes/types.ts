@@ -171,6 +171,8 @@ export interface InteractiveModeContext {
 	keybindings: KeybindingsManager;
 	agent: AgentSession["agent"];
 	historyStorage?: HistoryStorage;
+	/** Re-snapshot the editor's prompt recall when the `historyScope` identity may have moved. */
+	refreshHistoryScope(): void;
 	mcpManager?: MCPManager;
 	lspServers?: LspStartupServerInfo[];
 	/** Owns hosting: manual `/collab`, `collab.autoStart`, and room rotation on session switch. */
